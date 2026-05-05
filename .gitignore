@@ -1,0 +1,26 @@
+# 模型权重（体积过大，超过 GitHub 单文件 100MB 限制）
+model/
+*.onnx
+*.pt
+*.ckpt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ASR 中间产物（每次运行重新生成）
+asr_result.txt
+asr_cer_result.txt
+asr_cer_medium.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Claude
+.claude/
