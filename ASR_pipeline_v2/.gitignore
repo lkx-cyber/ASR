@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 模型缓存（MossFormer2_SS_16K 单文件 640MB，超 GitHub 100MB 单文件硬限）
+model_cache/
+
+# 临时目录
+_tmp_*/
+*.tmp
+
+# 日志
+*.log
+dataset2_cleaned_log.txt
+
+# IDE / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
