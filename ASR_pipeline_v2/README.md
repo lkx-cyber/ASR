@@ -36,6 +36,11 @@ ASR_pipeline_v2/
 ├── analyze_target_signals.py            # 多信号目标人识别 (响度/时长/onset/声纹方差)
 ├── clean_dataset.py                     # 数据集自动清洗，分桶
 │
+│ -------- 测试 --------
+├── test_separation_sample30.py          # 抽样 30 条评估分离效果（保存所有 wav 供人耳校验）
+├── test_separation_all.py               # 全量评估，输出指标 CSV
+├── device_utils.py                      # GPU/CPU 自动检测 + 设备管理
+│
 │ -------- 数据 --------
 ├── samples_test/                        # 4 个 m4a 测试样本（10s 双说话人混合）
 ├── recordings_raw/                      # 真实业务 PTT 录音 (3458 条, 8kHz)
@@ -70,7 +75,14 @@ pip install resemblyzer webrtcvad-wheels                # 说话人嵌入 + VAD
 pip install faster-whisper opencc-python-reimplemented  # whisper ASR + 繁简转换
 pip install funasr modelscope torchaudio                # FunASR (Paraformer)
 pip install clearvoice                                   # MossFormer2 分离
+
+# 如果你有 NVIDIA GPU（强烈推荐，速度快 5-20x）：
+pip uninstall torch torchaudio -y
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128  # RTX 50系
+# 老一些的卡用 cu121 即可
 ```
+
+GPU 检测会自动进行，无需改代码。设环境变量 `ASR_PIPELINE_DEVICE=cpu` 可强制 CPU。
 
 ### 2. 模型权重
 
@@ -102,20 +114,114 @@ python separate_mossformer.py          # MossFormer2 SOTA
 python separate_compare_postproc.py    # 看后处理增益
 ```
 
-### B. 在已清洗数据集上做评估
+### B. 在已清洗数据集上评估分离效果（核心场景）
+
+我们提供两个专用脚本，都会自动从 `recordings_cleaned/green + yellow` 取样：
+
+#### 🧪 脚本 1：抽样 30 条详查（推荐先跑）
 
 ```bash
-# 步骤 1: 选一个桶（推荐 green）的样本来测分离/ASR
-ls recordings_cleaned/green/ | head    # 查看可用样本
-
-# 步骤 2: 用 ASR 转写自动标注（FunASR 端到端）
-python asr_pipeline_funasr.py recordings_cleaned/green/0007eee6bcd84b0fbeeb0e13b21f46aa.wav
-
-# 步骤 3: 想批量测分离效果？把要测的文件复制成 samples_test/ 同名结构，
-#         然后跑 separate_baseline.py，它会处理目录里所有 m4a / wav
+python test_separation_sample30.py                 # 默认 30 条，含 baseline + MossFormer2
+python test_separation_sample30.py --n 50          # 抽 50 条
+python test_separation_sample30.py --no-mossformer # 仅 baseline
+python test_separation_sample30.py --tiers green   # 只从 green 抽
+python test_separation_sample30.py --seed 7        # 换种子得不同样本
 ```
 
-如果要在 `recordings_cleaned/green/` 上批量评估分离，最简单的做法是临时把脚本里的 `DATASET_DIR` 指过去：
+**耗时（GPU 上）**：30 条 ~3-4 分钟，含 baseline + MossFormer2 + 5 次 ASR/条。
+
+**输出**（`test_separation_sample30/`）：
+```
+test_separation_sample30/
+├── sample_report.csv             每条的全部指标 + 自动分类
+├── sample_summary.txt            统计 + 类别说明
+└── {filename}/
+    ├── mix.wav                   ← 原始录音
+    ├── baseline_轨1.wav           ← ONNX + Wiener 后处理
+    ├── baseline_轨2.wav
+    ├── mossformer_轨1.wav         ← MossFormer2 SOTA
+    └── mossformer_轨2.wav
+```
+
+**使用流程**：
+1. 跑完后看 `sample_summary.txt` 中的"自动分类汇总"，判断 baseline / MF2 哪个对你的数据更适合
+2. 进入子目录用 Audacity 或 VSCode Audio Preview 听 wav，**人耳校验自动分类是否准确**
+3. 看 `sample_report.csv`，按 `baseline_class=success_multi` 筛真正的多人分离 case
+
+#### 🧪 脚本 2：全量评估（决策依据）
+
+```bash
+# 默认: 仅 baseline, 无 ASR, 不存输出 wav (~30 分钟)
+python test_separation_all.py
+
+# 推荐: 失败 case 保存下来供听感校验（磁盘占用很小）
+python test_separation_all.py --save-failures
+
+# 加 ASR (~1.5 小时)
+python test_separation_all.py --with-asr --save-failures
+
+# 全套（baseline + MF2 + ASR）(~3-3.5 小时)
+python test_separation_all.py --with-asr --with-mossformer --save-failures
+
+# 调试: 只跑前 100 条
+python test_separation_all.py --limit 100 --save-failures
+```
+
+**耗时表（GPU 上 3031 条 green+yellow）**：
+
+| 命令 | 预估耗时 | 说明 |
+|---|---|---|
+| 默认 | ~30 分钟 | baseline + 相似度 + 能量比 |
+| `--with-asr` | ~1.5 小时 | + 每条 3 次 ASR |
+| `--with-mossformer` | ~1.5 小时 | + MF2 推理 |
+| `--with-asr --with-mossformer` | **~3-3.5 小时** | 完整对比 |
+
+⚠️ **这是离线批量评估时间，不是产线 UX**。产线每次只处理一个 PTT 请求，单条延迟约 1-2 秒，用户感知不到。
+
+**输出**：
+```
+test_separation_all/
+├── all_report.csv                  ← 全部录音的指标 (按 tier+sim 排序便于过滤)
+├── all_summary.txt                 ← 分类统计 + 占比
+└── failures/                       ← (--save-failures) 疑似失败的 case
+    └── {filename}/                  让你听感复核分类是否准
+        ├── mix.wav
+        ├── baseline_轨1.wav
+        └── baseline_轨2.wav
+```
+
+#### 📊 自动分类的 5 个类别（两个脚本通用）
+
+| 类别 | 触发条件 | 含义 |
+|---|---|---|
+| `success_multi` | 相似度 < 0.7 + 两路都有 ASR 内容 | ✅ **真的成功分离了多人** |
+| `single_clean` | 一路能量 < 5% + 另一路有内容 | ✅ 单人输入正确处理 |
+| `failed_or_single` | 相似度 > 0.92 | ⚠️ 模型崩 / 输入本就单人 |
+| `single_no_content` | 一路静音且另一路也无内容 | ⚠️ 录音质量差 |
+| `ambiguous` | 中间状态 | 需人耳判断 |
+
+**对 PTT 数据的预期分布**（业务大多数是单人）：
+- `single_clean` 应是大头（baseline 上）
+- `success_multi` 占比小但是**最有价值的 case**——这些是真正需要分离的多人录音
+- `failed_or_single` 多了说明阈值要调或模型不够强
+
+#### 🔍 重要发现：baseline > MossFormer2（对 PTT 数据）
+
+实测 baseline 在你们的 PTT 数据上**普遍优于 MossFormer2**：
+
+| 指标 | baseline (ONNX + Wiener) | MossFormer2 |
+|---|---|---|
+| 单人输入能量分布 | 99/1（一路接近静音） | 50/50（强行平分）|
+| 听感 | 接近原 mix 音量 | 每路减半，细节丢失 |
+| 多人输入分离 | 中等 | 更好（但多人 case 极少）|
+
+**原因**：MossFormer2 是为「真实多人混合」训练的，单人输入是 OOD（out of distribution）；baseline 的 Wiener 软掩码会自动判定单人并把能量集中到一路。**95% 是单人的 PTT 业务场景下，baseline 更合适**。
+
+---
+
+### C. 在不同数据上测分离（修改 DATASET_DIR）
+
+如果想跑非 cleaned 子集的数据，最简单方法是改脚本顶部 `DATASET_DIR`：
 
 ```python
 # 在 separate_baseline.py 顶部改
@@ -124,7 +230,7 @@ DATASET_DIR = os.path.join(BASE_DIR, "recordings_cleaned", "green")
 
 或者在命令行加 `--dataset` 参数（脚本未实现，可作为下一步迭代）。
 
-### C. 跑数据清洗
+### D. 跑数据清洗
 
 ```bash
 # 完整清洗 recordings_raw/ (~90 分钟 / 3458 条)
@@ -139,17 +245,17 @@ python clean_dataset.py --limit 30
 - `report.csv`：每条的 13 项指标 + 分桶 + 原因 + ASR 文本
 - `summary.txt`：总体统计 + Top 20 剔除原因
 
-### D. ASR 引擎对比
+### E. ASR 引擎对比
 
 ```bash
 # 单文件 FunASR demo
 python asr_pipeline_funasr.py [audio_path]
 
-# faster-whisper vs FunASR (需要 ../公司项目/audiosep/ 同级目录)
+# faster-whisper vs FunASR (需要 ../audiosep/ 即 v1 目录可用)
 python asr_compare_engines.py
 ```
 
-### E. 多信号目标说话人分析
+### F. 多信号目标说话人分析
 
 ```bash
 # 必须先跑过 separate_baseline.py 生成分离结果

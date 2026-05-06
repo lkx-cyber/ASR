@@ -145,8 +145,9 @@ def evaluate_separation(mix, sources):
 
 def speaker_similarity(sources):
     try:
-        from resemblyzer import VoiceEncoder, preprocess_wav
-        enc = VoiceEncoder(verbose=False)
+        from resemblyzer import preprocess_wav
+        from device_utils import get_voice_encoder
+        enc = get_voice_encoder()  # 首次加载后缓存复用
         embs = [enc.embed_utterance(preprocess_wav(s, source_sr=SR)) for s in sources]
         e0, e1 = embs[0], embs[1]
         cos = float(np.dot(e0, e1) / (np.linalg.norm(e0) * np.linalg.norm(e1) + 1e-12))
