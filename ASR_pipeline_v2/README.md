@@ -55,6 +55,9 @@ ASR_pipeline_v2/
 ├── find_separation_demo.py              # ⭐ 自动从全量找"分离有展示价值"的多人 case
 ├── demo_for_boss.py                     # 抽样 5 条 (clean+/分离结果) 给老板的演示包
 │
+│ -------- 人工标注 --------
+├── label_groundtruth.py                 # ⭐ Ground Truth 标注工具 (建评估金标准)
+│
 │ -------- 降噪（v2 新增） --------
 ├── denoise.py                           # DFN3 降噪模块（50% 干湿混合 + RMS 增益匹配，可复用）
 │
@@ -316,7 +319,68 @@ python find_separation_demo.py --n-success 3 --n-control 2
 # 输出 demo_for_boss/  内含 5 条样本的 mix.wav + 分离轨 + ASR 对比
 ```
 
-### F. ASR 引擎对比
+### F. Ground Truth 人工标注 (可让助手做)
+
+**用途**：建评估金标准，让所有算法都能算客观 CER。
+
+**怎么跑**：
+```bash
+python label_groundtruth.py                    # 默认 100 条 green++
+python label_groundtruth.py --n 50             # 抽 50 条
+python label_groundtruth.py --source recordings_cleaned_v2/green+    # 换 tier
+python label_groundtruth.py --output my_gt.csv                       # 改输出路径
+```
+
+**操作流程（写给团队任何成员）**：
+
+1. 程序自动播放当前样本的录音
+2. 屏幕显示 ASR 自动识别的文本，作为参考起点
+3. 听清楚后选下面之一：
+
+   | 操作 | 命令 | 用途 |
+   |---|---|---|
+   | 直接打字 + Enter | (任意文本) | 输入你听到的真实内容 |
+   | `/a` + Enter | 一键采用 | ASR 已经对了，不用改 |
+   | `/r` + Enter | 重播 | 没听清，再听一次 |
+   | `/s` + Enter | 跳过 | 实在听不清，不标注 |
+   | `/n 噪声大` | 加备注 | 给特殊样本打 tag |
+   | `/q` + Enter | 退出 | 已标的会保存，下次能续 |
+   | `/b` + Enter | 看上一条 | 要改的话手工编辑 CSV |
+
+4. 输入完后**回车**，自动播放下一条，循环
+
+**重要特性**：
+- 💾 **每条立刻 flush 到 CSV** —— 断电、关机、Ctrl+C 都不会丢
+- ⏯️ **重启自动续** —— 重新 `python label_groundtruth.py` 会跳过已标的
+- 🤖 **ASR 当起点** —— 多数情况按 `/a` 即可，不用从零打字
+
+**预期工时**：100 条 ≈ 2 小时（每条约 60-90 秒：听+判断+输入）
+
+**输出 CSV**：
+```
+filename, asr_text, correct_text, duration, labeled_at, notes
+```
+
+跑完这个，后续就能拿 `groundtruth.csv` 客观评估任意 pipeline 的 CER。
+
+**给助手的最小说明**（可以直接转发）：
+```
+打开 PowerShell, 进项目目录:
+  cd 锦城\公司项目\ASR_pipeline_v2
+  conda activate ASR
+  python label_groundtruth.py
+
+然后:
+  - 听音频
+  - 输入听到的文本, 回车
+  - 听不清就 /s 跳过, ASR 已对就 /a 用它
+  - 想休息就 /q 退出, 下次回来直接重跑就续上
+
+目标 100 条, 大约 2 小时.
+中途出问题可以直接关掉, 已经标的不会丢.
+```
+
+### G. ASR 引擎对比
 
 ```bash
 # 单文件 FunASR demo
@@ -326,7 +390,7 @@ python asr_pipeline_funasr.py [audio_path]
 python asr_compare_engines.py
 ```
 
-### G. 多信号目标说话人分析
+### H. 多信号目标说话人分析
 
 ```bash
 # 必须先跑过 separate_baseline.py 生成分离结果

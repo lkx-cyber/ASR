@@ -22,6 +22,11 @@ output_separated_compare/
 # 临时输出 wav (单文件 demo)
 enhance_target_out.wav
 
+# Ground Truth 标注 (按需提交, 默认 ignore 避免半成品被推)
+# 标注完成后想分享时, 可手动: git add -f groundtruth.csv
+groundtruth.csv
+*_gt.csv
+
 # 临时目录
 _tmp_*/
 *.tmp
