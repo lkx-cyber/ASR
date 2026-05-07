@@ -16,6 +16,25 @@ asr_result.txt
 asr_cer_result.txt
 asr_cer_medium.txt
 
+# 数据集（体积大，且包含真实业务录音不入库）
+dataset/
+dataset_16k/
+dataset_16k.zip
+小智音频.zip
+ASR_pipeline_v2/recordings_raw/
+ASR_pipeline_v2/recordings_cleaned/
+
+# 测试脚本输出（每次运行重新生成）
+ASR_pipeline_v2/test_denoise/
+ASR_pipeline_v2/test_denoise_asr/
+ASR_pipeline_v2/test_denoise_strength/
+ASR_pipeline_v2/test_pipeline_compare/
+ASR_pipeline_v2/test_separation_sample30/
+ASR_pipeline_v2/test_separation_all/
+ASR_pipeline_v2/output_separated_enhanced/
+ASR_pipeline_v2/output_separated_mossformer/
+ASR_pipeline_v2/model_cache/
+
 # IDE
 .idea/
 .vscode/

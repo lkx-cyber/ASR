@@ -10,6 +10,8 @@ v2 是 v1 的工程化升级版，引入：
 - FunASR / MossFormer2 / faster-whisper 多引擎集成
 - 多信号目标说话人识别
 - 数据集自动清洗（已对 3458 条真实录音清洗完毕）
+- **DeepFilterNet3 前端降噪模块**（吞音敏感场景下的保守混合策略）
+- **多 pipeline 横向对比框架**（baseline / 降噪 / FunASR / whisper 任意组合）
 
 ---
 
@@ -36,10 +38,21 @@ ASR_pipeline_v2/
 ├── analyze_target_signals.py            # 多信号目标人识别 (响度/时长/onset/声纹方差)
 ├── clean_dataset.py                     # 数据集自动清洗，分桶
 │
-│ -------- 测试 --------
+│ -------- 降噪（v2 新增） --------
+├── denoise.py                           # DFN3 降噪模块（50% 干湿混合 + RMS 增益匹配，可复用）
+│
+│ -------- 分离评估 --------
 ├── test_separation_sample30.py          # 抽样 30 条评估分离效果（保存所有 wav 供人耳校验）
 ├── test_separation_all.py               # 全量评估，输出指标 CSV
 ├── device_utils.py                      # GPU/CPU 自动检测 + 设备管理
+│
+│ -------- 降噪/ASR 对比测试（v2 新增） --------
+├── test_denoise_sample.py               # 抽 10 条跑 DFN3，输出原始/降噪 wav 对比
+├── test_denoise_strength.py             # 多种降噪强度 A/B（满强度 / atten_lim / 干湿混合 / 增益匹配）
+├── test_denoise_asr.py                  # 30 条 ASR 前后对比（whisper），统计字数/空率
+├── measure_denoise_metrics.py           # 量化降噪客观指标（noise_floor / SNR / hf_noise / hnr 等）
+├── test_funasr_vs_whisper.py            # whisper-medium vs FunASR Paraformer 对比（含降噪前后）
+├── test_pipeline_compare.py             # ★ 6 套 pipeline 横向对比（推荐入口）
 │
 │ -------- 数据 --------
 ├── samples_test/                        # 4 个 m4a 测试样本（10s 双说话人混合）
@@ -260,6 +273,195 @@ python asr_compare_engines.py
 ```bash
 # 必须先跑过 separate_baseline.py 生成分离结果
 python analyze_target_signals.py
+```
+
+---
+
+---
+
+## 🔧 降噪与多 Pipeline 对比（v2 新增）
+
+### 背景
+
+我们的真实业务场景是**校园课间嘈杂环境** + **8kHz 采集** + **儿童语音为主**。前端降噪需要在「噪声压制」和「儿童弱辅音保护」之间取舍。本节工具就是为了：
+
+1. 量化降噪的实际效果
+2. 横向比较不同 pipeline 组合（降噪/分离/ASR 引擎）
+3. 帮助决策最终生产配置
+
+---
+
+### G.1 降噪模块 `denoise.py`
+
+封装好的 DeepFilterNet3 降噪模块，**经过 A/B 测试确定的最优配置**：
+
+- 50% 干湿混合（避免吞音）
+- RMS 增益匹配（保持原始响度）
+- 防削波（peak ≤ 0.99）
+
+```python
+from denoise import Denoiser
+dn = Denoiser()                  # 单例，首次约 0.1s
+y = dn(x_16k)                    # x_16k: float32 numpy, mono, 16kHz
+```
+
+**特性**：
+- 单例模式（避免重复加载模型）
+- CPU 上 RTF ≈ 0.02（比实时快 50 倍）
+- 自动 16k→48k→DFN3→16k 重采样
+
+---
+
+### G.2 降噪听感测试
+
+#### 抽样测试（推荐先跑）
+
+```bash
+python test_denoise_sample.py                       # 默认 green/yellow 各 5 条
+python test_denoise_sample.py --n-green 10 --n-yellow 10
+```
+
+**输出** `test_denoise/{tier}_{filename}/`：
+- `1_原始.wav` — 原始录音
+- `2_降噪.wav` — 降噪后
+
+**控制台同时打印**每条样本的 RMS、噪声底变化和处理耗时。
+
+⚠️ **过度抑制检测**：若降噪后 RMS 比原始低 30+ dB（如 -22 dB → -68 dB），说明 DFN3 把整段当成噪声压死了，需要对该样本退到更保守的设置。
+
+#### 强度对比（针对吞音问题）
+
+```bash
+python test_denoise_strength.py --input recordings_cleaned/green/xxx.wav
+```
+
+对单条样本生成 5 种强度变体：
+- `00_原始.wav`
+- `06_干湿50%(原版).wav`
+- `06a_干湿50%+RMS增益匹配.wav` ⭐ **推荐**
+- `06b_干湿70%+RMS增益匹配.wav`
+- `06c_干湿50%+峰值归一化_-3dBFS.wav`
+
+用 Audacity / VSCode 对比挑最适合的。
+
+---
+
+### G.3 降噪客观指标量化 `measure_denoise_metrics.py`
+
+```bash
+# 先跑过 test_denoise_asr.py 生成样本对，然后：
+python measure_denoise_metrics.py
+```
+
+**输出 8 个客观指标**（原始 vs 降噪）：
+
+| 指标 | 方向 | 含义 |
+|---|---|---|
+| `noise_floor_db` | ↓ | 最低 10% 帧 RMS（背景噪声底） |
+| `hf_noise_db_4-8k` | ↓ | 高频段能量（玩耍声/碰撞声主战场） |
+| `lf_rumble_db_<150` | ↓ | 低频段能量（HVAC、风扇） |
+| `spectral_flatness` | ↓ | 非语音段谱平坦度（越低越像有结构信号） |
+| `speech_rms_db` | — | 语音段 RMS（应保持稳定） |
+| `snr_db` | ↑ | 粗略信噪比 |
+| `hnr_db` | ↑ | 谐波-噪声比（语音清晰度） |
+| `crest_db` | ↑ | 波形动态范围 |
+
+**实测结论**（cleaned 数据 30 条）：
+- hf_noise: -4.3 dB（77% 样本改善）✅ 最强效果
+- snr: +1.2 dB（70% 样本改善）
+- noise_floor: -1.4 dB（70% 样本改善）
+- 改善幅度小因为：① 50% 混合本身保守 ② 8kHz 数据已经较干净 ③ DFN3 训练数据偏成人
+
+---
+
+### G.4 ASR 引擎对比 `test_funasr_vs_whisper.py`
+
+```bash
+python test_funasr_vs_whisper.py                    # 默认 green/yellow 各 15
+```
+
+每条样本输出 4 个版本转写：whisper 原始/降噪 + FunASR 原始/降噪。
+
+**实测结论（30 条样本）**：
+
+| 引擎 | 平均字数 | 非空样本 | 幻觉数 |
+|---|---|---|---|
+| whisper 原始 | 7.4 | 23/30 | 多 |
+| whisper 降噪 | 8.4 | 25/30 | 多 |
+| **FunASR 原始** | **9.1** | **30/30** | **0** |
+| **FunASR 降噪** | **9.4** | **30/30** | **0** |
+
+**关键发现**：
+- FunASR **召回率 100%**（whisper 7/30 输出空文本）
+- FunASR **几乎不幻觉**（whisper 常见"謝謝觀看/我爱你/字幕志愿者"等模板）
+- FunASR 速度比 whisper-medium 快 50-100 倍（RTF ~0.01）
+- 降噪在 FunASR 上效果很小（+0.3 字 vs whisper +1.0 字）—— 因为 FunASR 本身抗噪
+
+---
+
+### G.5 多 Pipeline 横向对比 `test_pipeline_compare.py` ⭐
+
+**最重要的对比工具**。同一份输入，6 套 pipeline 并跑：
+
+| ID | Pipeline | 用途 |
+|---|---|---|
+| P0 | raw → whisper | 历史对照 |
+| P1 | raw → FunASR | **最简最快** |
+| P2 | DFN3 → FunASR | 加前端降噪 |
+| P3 | baseline 分离 → FunASR | **现 baseline 路线** |
+| P4 | DFN3 → baseline 分离 → FunASR | 降噪+分离 |
+| P5 | baseline 分离 → whisper | baseline 早期形态 |
+
+```bash
+python test_pipeline_compare.py                     # 默认 green/yellow 各 10
+python test_pipeline_compare.py --n-green 5 --n-yellow 5
+python test_pipeline_compare.py --no-save-wavs      # 不存中间 wav，省磁盘
+```
+
+**输出**：
+- 控制台：每条样本 6 个 pipeline 的转写对照
+- `test_pipeline_compare/report.csv` — 全部数据 CSV
+- `test_pipeline_compare/{tier}_{filename}/` — 每个 pipeline 的中间 wav，供人耳校验
+  - `00_raw.wav`
+  - `02_dfn3.wav`
+  - `03_baseline_轨{1,2}.wav`
+  - `04_dfn3_baseline_轨{1,2}.wav`
+
+**典型结论（已跑过 15 条）**：
+- 单人 PTT 场景下 **P1 (raw→FunASR)** 综合最好（最快、最准、无幻觉）
+- 多人场景下 **P3 (baseline→FunASR)** 仍有价值（能分得开两人）
+- 分离对单人 PTT **有副作用**：常引入"重复字"、"幻觉轨"
+- DFN3 降噪在 FunASR pipeline 上**边际收益小**
+
+**推荐生产架构**（按"单/多人判别 + 路由"）：
+```
+原始音频
+  ↓ 单/多人判别
+单人 → P1: raw → FunASR
+多人 → P3: baseline 分离 → FunASR(各轨) → 选目标人
+```
+
+---
+
+### 🎯 评估流程推荐顺序
+
+新接手项目时按以下顺序跑通：
+
+```bash
+# 1. 听感先行：抽样听降噪前后差异
+python test_denoise_sample.py
+
+# 2. 客观量化：算降噪指标
+python test_denoise_asr.py --save-wavs       # 生成样本对
+python measure_denoise_metrics.py            # 算指标
+
+# 3. 对比 ASR 引擎
+python test_funasr_vs_whisper.py
+
+# 4. 终极横向对比（决策依据）
+python test_pipeline_compare.py
+
+# 5. 看 report.csv，按业务场景挑最优 pipeline
 ```
 
 ---

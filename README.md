@@ -6,18 +6,21 @@
 
 ```
 .
-├── audiosep/                      # 主要代码
+├── audiosep/                      # v1 主要代码（baseline 单脚本 demo）
 │   ├── sampletest.py              # 原版分离脚本（直接调 ONNX 模型）
 │   ├── separate_enhanced.py       # 增强版：RMS 归一 + 谱减降噪 + 预加重 + Wiener 软掩码
 │   ├── evaluate.py                # 分离质量评估（混合一致性、能量分布、说话人区分度，可选 SI-SDR）
 │   ├── asr_test.py                # 用 faster-whisper 转写各路音频
 │   ├── asr_cer.py                 # ASR 字错率评估（带繁→简归一）
+│   ├── resample_dataset.py        # ⭐ 数据重采样工具：MP4-in-WAV → 标准 WAV @ 16kHz（多进程 ffmpeg）
 │   ├── 2in1.wav                   # 测试音频（2 人混合，~4 秒）
-│   ├── 分离_说话人_*.wav          # 原版分离结果
-│   └── 分离_增强_说话人_*.wav     # 增强版分离结果
+│   └── 分离_*.wav                 # 分离结果
+├── ASR_pipeline_v2/               # v2 工程化升级版（参见该目录下 README）
 └── model/                         # 模型权重（未入库，需自行放入）
     └── model.onnx
 ```
+
+> **v2 工作请进入 `ASR_pipeline_v2/`**，包含：DFN3 降噪、FunASR/whisper 多引擎对比、多 Pipeline 横向评估等完整工具链。
 
 ## 环境
 
@@ -45,6 +48,9 @@ python audiosep/evaluate.py --ref s1.wav s2.wav   # 有参考时算 SI-SDR
 
 # ASR 转写 + CER
 python audiosep/asr_cer.py
+
+# 数据重采样（dataset/ 中的 MP4-in-WAV → dataset_16k/ 16kHz 标准 WAV）
+python audiosep/resample_dataset.py
 ```
 
 ## 当前优化效果
