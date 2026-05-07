@@ -319,65 +319,61 @@ python find_separation_demo.py --n-success 3 --n-control 2
 # 输出 demo_for_boss/  内含 5 条样本的 mix.wav + 分离轨 + ASR 对比
 ```
 
-### F. Ground Truth 人工标注 (可让助手做)
+### F. Ground Truth 人工标注
 
-**用途**：建评估金标准，让所有算法都能算客观 CER。
+**用途**：建评估金标准，让所有 pipeline 都能算客观 CER。
 
-**怎么跑**：
+#### 启动
+
 ```bash
-python label_groundtruth.py                    # 默认 100 条 green++
-python label_groundtruth.py --n 50             # 抽 50 条
+conda activate ASR
+cd ASR_pipeline_v2
+
+python label_groundtruth.py                    # 默认抽 100 条 green++
+python label_groundtruth.py --n 50             # 改成 50 条
 python label_groundtruth.py --source recordings_cleaned_v2/green+    # 换 tier
 python label_groundtruth.py --output my_gt.csv                       # 改输出路径
+python label_groundtruth.py --no-play          # 不自动播放, 用其他工具听
 ```
 
-**操作流程（写给团队任何成员）**：
+#### 操作流程
 
-1. 程序自动播放当前样本的录音
-2. 屏幕显示 ASR 自动识别的文本，作为参考起点
-3. 听清楚后选下面之一：
+每条样本程序会自动播放音频 + 显示 ASR 自动识别文本作为参考。然后输入下面之一并回车：
 
-   | 操作 | 命令 | 用途 |
-   |---|---|---|
-   | 直接打字 + Enter | (任意文本) | 输入你听到的真实内容 |
-   | `/a` + Enter | 一键采用 | ASR 已经对了，不用改 |
-   | `/r` + Enter | 重播 | 没听清，再听一次 |
-   | `/s` + Enter | 跳过 | 实在听不清，不标注 |
-   | `/n 噪声大` | 加备注 | 给特殊样本打 tag |
-   | `/q` + Enter | 退出 | 已标的会保存，下次能续 |
-   | `/b` + Enter | 看上一条 | 要改的话手工编辑 CSV |
+| 操作 | 用途 |
+|---|---|
+| 直接输入正确文本 | 听到什么打什么 |
+| `/a` | ASR 已经对了，一字不改采用 |
+| `/r` | 重播当前音频 |
+| `/s` | 跳过（不保存这条） |
+| `/n 备注内容` | 给当前样本加备注（如 `/n 背景嘈杂`） |
+| `/b` | 显示上一条信息（要改请手工编辑 CSV） |
+| `/q` | 退出（已标的不会丢，下次自动续） |
 
-4. 输入完后**回车**，自动播放下一条，循环
+#### 关键特性
 
-**重要特性**：
-- 💾 **每条立刻 flush 到 CSV** —— 断电、关机、Ctrl+C 都不会丢
-- ⏯️ **重启自动续** —— 重新 `python label_groundtruth.py` 会跳过已标的
-- 🤖 **ASR 当起点** —— 多数情况按 `/a` 即可，不用从零打字
+- 每条立刻 flush 到 CSV，断电、Ctrl+C 都不会丢
+- 重启自动跳过已标注的，从断点继续
+- ASR 文本作为输入起点（多数 case 直接 `/a` 一键采用）
 
-**预期工时**：100 条 ≈ 2 小时（每条约 60-90 秒：听+判断+输入）
+#### 输出
 
-**输出 CSV**：
 ```
-filename, asr_text, correct_text, duration, labeled_at, notes
+groundtruth.csv:
+    filename, asr_text, correct_text, duration, labeled_at, notes
 ```
 
-跑完这个，后续就能拿 `groundtruth.csv` 客观评估任意 pipeline 的 CER。
+100 条预期标注时间约 2 小时（每条 60-90 秒）。
 
-**给助手的最小说明**（可以直接转发）：
-```
-打开 PowerShell, 进项目目录:
-  cd 锦城\公司项目\ASR_pipeline_v2
-  conda activate ASR
-  python label_groundtruth.py
+#### 标完之后
 
-然后:
-  - 听音频
-  - 输入听到的文本, 回车
-  - 听不清就 /s 跳过, ASR 已对就 /a 用它
-  - 想休息就 /q 退出, 下次回来直接重跑就续上
+```python
+# 用 groundtruth.csv 算任意 pipeline 的 CER
+import csv
+gt = {row["filename"]: row["correct_text"] for row in csv.DictReader(open("groundtruth.csv", encoding="utf-8-sig"))}
 
-目标 100 条, 大约 2 小时.
-中途出问题可以直接关掉, 已经标的不会丢.
+# 加载某个 pipeline 的输出, 对每条算 cer(pipeline_text, gt[filename])
+# 平均 CER = 整体准确率
 ```
 
 ### G. ASR 引擎对比
