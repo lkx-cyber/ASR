@@ -1,0 +1,27 @@
+clean_dataset_v2 - 增强版数据集清洗
+时间: 2026-05-08 00:41:48
+输入: C:\Users\MasterQian\Desktop\锦城\公司项目\ASR_pipeline_v2\recordings_raw
+总数: 3458
+耗时: 117.9 分钟
+
+分桶:
+  green++: 253 (7.3%)
+  green+: 1826 (52.8%)
+  green: 3 (0.1%)
+  yellow: 949 (27.4%)
+  orange: 167 (4.8%)
+  red: 260 (7.5%)
+
+新信号通过数分布:
+  0/5: 1321
+  2/5: 3
+  3/5: 131
+  4/5: 1695
+  5/5: 253
+
+阈值:
+  silero >= 0.3
+  spec_entropy <= 0.85
+  f0_voiced >= 0.15
+  dual_pinyin_cer <= 0.4
+  rms_dynamics >= 0.2

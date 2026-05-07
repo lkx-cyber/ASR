@@ -12,9 +12,15 @@ checkpoints/
 # 测试输出（每次跑脚本生成）
 test_separation_sample30/
 test_separation_all/
+test_lowpass_fix/
+test_enhance_target/
+test_pipeline_router/
 output_separated_enhanced/
 output_separated_mossformer/
 output_separated_compare/
+
+# 临时输出 wav (单文件 demo)
+enhance_target_out.wav
 
 # 临时目录
 _tmp_*/
@@ -23,6 +29,7 @@ _tmp_*/
 # 日志
 *.log
 dataset2_cleaned_log.txt
+clean_v2_log.txt
 
 # IDE / 系统
 .idea/

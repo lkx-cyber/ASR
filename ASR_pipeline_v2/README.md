@@ -12,6 +12,11 @@ v2 是 v1 的工程化升级版，引入：
 - 数据集自动清洗（已对 3458 条真实录音清洗完毕）
 - **DeepFilterNet3 前端降噪模块**（吞音敏感场景下的保守混合策略）
 - **多 pipeline 横向对比框架**（baseline / 降噪 / FunASR / whisper 任意组合）
+- **二代清洗 (clean_dataset_v2.py)**：基于 5 个新信号 (Silero VAD / 谱熵 / F0 / 双引擎一致性 / RMS 动态) 的更严格分桶
+- **单/多人判别器 (is_multispeaker.py)**：滑窗 speaker embedding 相似度
+- **路由 pipeline (pipeline_router.py)**：单人直转 / 多人分离选目标
+- **目标说话人增强 (enhance_target.py)**：锚点+持续性掩码（实测对真重叠场景效果有限，文档已记录）
+- **演示包生成 (find_separation_demo.py)**：从全量数据自动找有展示价值的多说话人分离案例
 
 ---
 
@@ -36,7 +41,19 @@ ASR_pipeline_v2/
 │
 │ -------- 分析与清洗 --------
 ├── analyze_target_signals.py            # 多信号目标人识别 (响度/时长/onset/声纹方差)
-├── clean_dataset.py                     # 数据集自动清洗，分桶
+├── clean_dataset.py                     # v1 数据集清洗（13 个指标）
+├── clean_dataset_v2.py                  # ⭐ v2 增强清洗（+5 个新信号: Silero VAD/谱熵/F0/双引擎/RMS动态）
+├── is_multispeaker.py                   # 单/多人判别器（滑窗 speaker embedding 相似度）
+│
+│ -------- 路由 / 增强（实验性，已记录失败原因） --------
+├── pipeline_router.py                   # 单/多人路由：单人 raw→FunASR / 多人 baseline→选目标→FunASR
+├── test_pipeline_router.py              # 路由测试（实测改善有限，详见实验结论）
+├── enhance_target.py                    # 目标人增强：锚点+持续性掩码（实测真重叠场景无效）
+├── test_enhance_target.py               # 增强模块测试
+│
+│ -------- 演示包生成 --------
+├── find_separation_demo.py              # ⭐ 自动从全量找"分离有展示价值"的多人 case
+├── demo_for_boss.py                     # 抽样 5 条 (clean+/分离结果) 给老板的演示包
 │
 │ -------- 降噪（v2 新增） --------
 ├── denoise.py                           # DFN3 降噪模块（50% 干湿混合 + RMS 增益匹配，可复用）
@@ -57,13 +74,25 @@ ASR_pipeline_v2/
 │ -------- 数据 --------
 ├── samples_test/                        # 4 个 m4a 测试样本（10s 双说话人混合）
 ├── recordings_raw/                      # 真实业务 PTT 录音 (3458 条, 8kHz)
-├── recordings_cleaned/                  # 清洗后分桶
-│   ├── green/    优质 ( 60.2%, 2082 条)  ← 推荐评估用
+├── recordings_cleaned/                  # v1 清洗分桶 (13 信号)
+│   ├── green/    优质 ( 60.2%, 2082 条)
 │   ├── yellow/   可用 ( 27.4%,  949 条)
 │   ├── orange/   边缘 (  4.8%,  167 条)
 │   ├── red/      废弃 (  7.5%,  260 条)
-│   ├── report.csv         全部 3458 条的指标 + 分桶 + 原因 + ASR 文本
-│   └── summary.txt        总体统计
+│   └── report.csv / summary.txt
+│
+├── recordings_cleaned_v2/               # ⭐ v2 严格清洗分桶（推荐评估用）
+│   ├── green++/  黄金集 ( 7.3%, 253 条)  ← 5/5 信号全过, 听感几乎全是高质量
+│   ├── green+/   次高质 (52.8%, 1826 条) ← 3-4/5 过, 部分仍有杂质
+│   ├── green/    一般   ( 0.1%, 3 条)
+│   ├── yellow/   (27.4%,  949 条)
+│   ├── orange/   (4.8%,  167 条)
+│   ├── red/      (7.5%,  260 条)
+│   ├── report_v2.csv      18 个指标 + 双引擎 ASR 文本 + 分桶
+│   └── summary_v2.txt
+│
+├── verify_multi/                        # is_multispeaker 判定为多人的 61 条样本
+└── multispeaker_test100.csv             # 单/多人判别器在 green 100 条上的报告
 │
 │ -------- 输出 (运行脚本生成) --------
 ├── output_separated_enhanced/           # baseline 分离结果
@@ -245,20 +274,49 @@ DATASET_DIR = os.path.join(BASE_DIR, "recordings_cleaned", "green")
 
 ### D. 跑数据清洗
 
+**v1 清洗（13 个指标）**：
 ```bash
-# 完整清洗 recordings_raw/ (~90 分钟 / 3458 条)
-python clean_dataset.py
-
-# 试跑前 30 条
-python clean_dataset.py --limit 30
+python clean_dataset.py                  # ~90 分钟 / 3458 条
+python clean_dataset.py --limit 30       # 试跑
 ```
 
-输出在 `recordings_cleaned/`：
-- 4 个桶子目录（green/yellow/orange/red），按照阈值自动分桶
-- `report.csv`：每条的 13 项指标 + 分桶 + 原因 + ASR 文本
-- `summary.txt`：总体统计 + Top 20 剔除原因
+**v2 清洗（推荐）**——加 5 个新信号严格筛选：
+```bash
+python clean_dataset_v2.py               # ~120 分钟 / 3458 条 (GPU)
+python clean_dataset_v2.py --limit 30    # 试跑
+python clean_dataset_v2.py --skip-sensevoice  # 不跑双引擎一致性，更快
+```
 
-### E. ASR 引擎对比
+v2 新增的 5 个信号：
+- **Silero VAD** 真实语音占比（筛掉误触录音）
+- **谱熵 spectral entropy**（筛掉噪声主导段）
+- **F0 voiced ratio**（验证真有人声）
+- **双引擎 ASR 拼音 CER**（FunASR Paraformer vs SenseVoice 一致性）
+- **RMS 动态范围**（筛掉平噪声）
+
+输出 `recordings_cleaned_v2/` 含 6 个分桶（**新增 green++ / green+**）：
+- `green++` 5/5 全过 → 听感校验确认"高质量"
+- `green+` 3-4/5 过 → "参差不齐"，需进一步筛
+- 阈值在脚本顶部，根据听感反馈可调
+
+### E. 单/多人判别 + 演示包
+
+### E. 单/多人判别 + 演示包
+
+```bash
+# 单文件单/多人判别
+python is_multispeaker.py recordings_cleaned/green/abc.wav
+
+# 批量, 把判为多人的样本复制到 verify_multi/
+python is_multispeaker.py --dir recordings_cleaned/green --limit 100 --save-multi-to verify_multi/
+
+# 给老板的 demo 包: 自动找 3 条多人成功分离 + 2 条单人对照
+python find_separation_demo.py --n-success 3 --n-control 2
+
+# 输出 demo_for_boss/  内含 5 条样本的 mix.wav + 分离轨 + ASR 对比
+```
+
+### F. ASR 引擎对比
 
 ```bash
 # 单文件 FunASR demo
@@ -268,7 +326,7 @@ python asr_pipeline_funasr.py [audio_path]
 python asr_compare_engines.py
 ```
 
-### F. 多信号目标说话人分析
+### G. 多信号目标说话人分析
 
 ```bash
 # 必须先跑过 separate_baseline.py 生成分离结果
@@ -604,6 +662,55 @@ quality_score = 0.4 × (1 - similarity)        # 相似度低越好
 1. **不要只看 ASR 字数**：whisper / Paraformer 会从噪声里编出合理文本（幻觉）。我们已用黑名单过滤常见幻觉模式，但仍要人耳复核。
 2. **不要只看重建 SNR**：Wiener 软掩码必然让它飙到 60+ dB，但分离实际上可能很差。
 3. **听感永远是最终标准**：抽样 30 条人工听是必做的校验步骤。
+
+---
+
+## 🧪 v2 阶段实验结论 (2026-05)
+
+### 数据本质特征
+- 真实业务录音是 **8kHz 上采样到 16kHz** 的 mp4-in-wav 格式
+- 4-8kHz 频段几乎为空（重采样补零） → 影响所有依赖高频的模型
+- 95% 是「主说话人 + 弱背景人声」的非对称混合，**不是均衡多人混合**
+- "多说话人"场景里几乎全是**真重叠**（同帧两人同时发声），不是错峰
+
+### 各方案验证结果
+
+| 方案 | 状态 | 备注 |
+|---|---|---|
+| ❌ MossFormer2_SS_16K | **不可用** | 8kHz 上采数据上输出全是电流声/伪影。模型在 4-8kHz 空段凭空生成内容。低通修复无效。 |
+| ❌ TSE 频域分离思路 | 同 MF2 风险 | 任何"生成型"模型在空高频段都会失败 |
+| ⚠️ baseline ONNX + Wiener | **可用但有副作用** | 单人 PTT 场景下强行分两路，常常引入错字 (例: 三角洲→小猪)。多人 case 偶尔能成功分离。|
+| ❌ enhance_target.py (锚点+持续性掩码) | **真重叠场景无效** | 窗口判断粒度太粗，目标人和干扰人在同帧时压不下去。30 条测试 ASR 字数变化 0%。 |
+| ❌ pipeline_router.py (单/多人路由) | **改善有限** | 30 条对比 router 改对 1 / 改错 2 / 持平多。listen confirmed: baseline 分离对 PTT 数据多数情况是负贡献。 |
+| ✅ FunASR Paraformer (raw 直转) | **当前最佳** | 30 条 100% 召回率, 0 幻觉, 平均 9.1 字/条. 不需要任何前处理. |
+| ✅ DFN3 降噪 (50% 干湿混合) | **边际收益小** | 高频噪声 -4.3dB, 但 FunASR 本身抗噪强, 加 DFN3 ASR 字数 +0.3 |
+| ✅ clean_dataset_v2 (5 信号严格清洗) | **核心工具** | 253 条 green++ 黄金集听感几乎全部高质量, 适合做 ground truth |
+
+### 推荐生产架构
+
+经过反复验证，**最简单的方案就是最好的**：
+
+```
+PTT 录音 → FunASR (raw) → 文本    ← 不要加任何前处理！
+```
+
+**不要做的事**:
+- ❌ 加 MossFormer2 / 任何端到端生成型分离模型
+- ❌ 加 baseline ONNX 分离（单人场景副作用 > 多人场景收益）
+- ❌ 加复杂的目标说话人增强（实测无效）
+
+**可以选做的事**:
+- ⚠️ DFN3 前置降噪（收益小但无害，可作为可选项）
+- ✅ 在数据清洗阶段用 v2 的 5 信号严格筛选高质量子集做评估
+
+### 真正的"分离有展示价值"的 case
+通过 `find_separation_demo.py` 在 verify_multi/ 上扫描，**约 5-10% 的多说话人录音能通过 baseline 分离得到两路有意义的不同内容**。这部分 case 在 `demo_for_boss/` 已演示。其他 90%+ 多说话人录音 baseline 分离没有展示价值（要么把 target 切坏、要么副轨是空气）。
+
+### 下一步可探索方向
+- [ ] 在 green++ 上抽 50 条建 ground truth，量化 raw FunASR 真实 CER
+- [ ] 尝试将 4/5 通过的 1695 条 green+ 通过阈值微调升级到 green++（潜力大）
+- [ ] 试 SenseVoice 替代 Paraformer（已加载，可对比）
+- [ ] 专门为"主说话人 + 弱背景"场景训一个 8kHz 兼容的小模型（长期）
 
 ---
 
