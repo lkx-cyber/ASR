@@ -4,6 +4,8 @@
 
 本项目位于 [MasterQiann/ASR](https://github.com/MasterQiann/ASR) 仓库的 `ASR_pipeline_v2/` 子目录下。同仓库根目录的 `audiosep/` 是 v1 单脚本 demo（baseline 参照）。
 
+> 🆕 **新接手 / 跨机器开发请先读 [PROGRESS.md](PROGRESS.md)** —— 含当前状态、下一步、协作约定。
+
 v2 是 v1 的工程化升级版，引入：
 
 - 真实业务录音批处理
@@ -25,6 +27,7 @@ v2 是 v1 的工程化升级版，引入：
 ```
 ASR_pipeline_v2/
 ├── README.md                            ← 本文件
+├── PROGRESS.md                          ← 当前状态 + 下一步 + 跨机器协作约定
 ├── .gitignore
 │
 │ -------- 通用工具 --------
