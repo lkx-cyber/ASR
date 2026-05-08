@@ -34,6 +34,9 @@ ASR_pipeline_v2/test_separation_all/
 ASR_pipeline_v2/output_separated_enhanced/
 ASR_pipeline_v2/output_separated_mossformer/
 ASR_pipeline_v2/model_cache/
+ASR_pipeline_v2/test_audio_methods/
+ASR_pipeline_v2/eval_results/
+ASR_pipeline_v2/multispeaker_accuracy_*/
 
 # IDE
 .idea/

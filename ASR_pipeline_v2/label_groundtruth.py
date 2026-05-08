@@ -80,13 +80,18 @@ def stop_audio():
 
 
 def get_duration(path):
+    """获取音频时长。先 soundfile（快），再 librosa（兼容 MP4-in-WAV 等容器）。"""
     if sf is not None:
         try:
             info = sf.info(path)
             return info.frames / info.samplerate
         except Exception:
-            return 0.0
-    return 0.0
+            pass  # 落到 librosa fallback
+    try:
+        import librosa
+        return float(librosa.get_duration(path=path))
+    except Exception:
+        return 0.0
 
 
 def load_asr_lookup(csv_path):

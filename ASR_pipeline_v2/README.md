@@ -69,16 +69,26 @@ ASR_pipeline_v2/
 ├── test_separation_all.py               # 全量评估，输出指标 CSV
 ├── device_utils.py                      # GPU/CPU 自动检测 + 设备管理
 │
-│ -------- 降噪/ASR 对比测试（v2 新增） --------
+│ -------- 降噪 / FRCRN（v2 新增） --------
+├── denoise.py                           # DFN3 降噪模块（已在上方列出）
+├── frcrn_denoise.py                     # FRCRN（ClearerVoice，中文场景）封装
+│
+│ -------- 测试/评估脚本（v2 新增） --------
+├── test_audio_methods_compare.py        # ⭐ 主入口：4 场景 × 8 方法横向对比
+├── eval_with_groundtruth.py             # ⭐ 基于 GT 算 CER 的客观评估
+├── test_multispeaker_accuracy.py        # 单/多人判别器准确率验证
 ├── test_denoise_sample.py               # 抽 10 条跑 DFN3，输出原始/降噪 wav 对比
-├── test_denoise_strength.py             # 多种降噪强度 A/B（满强度 / atten_lim / 干湿混合 / 增益匹配）
+├── test_denoise_strength.py             # 多种降噪强度 A/B（atten_lim / 干湿混合 / 增益匹配）
 ├── test_denoise_asr.py                  # 30 条 ASR 前后对比（whisper），统计字数/空率
 ├── measure_denoise_metrics.py           # 量化降噪客观指标（noise_floor / SNR / hf_noise / hnr 等）
 ├── test_funasr_vs_whisper.py            # whisper-medium vs FunASR Paraformer 对比（含降噪前后）
-├── test_pipeline_compare.py             # ★ 6 套 pipeline 横向对比（推荐入口）
+├── test_pipeline_compare.py             # 6 套 pipeline 横向对比（v1 老脚本，已被 test_audio_methods_compare 取代）
+├── groundtruth.csv                      # 100 条人工标注样本（用于 eval_with_groundtruth）
 │
 │ -------- 数据 --------
-├── samples_test/                        # 4 个 m4a 测试样本（10s 双说话人混合）
+├── samples_test/                        # ⭐ 团队自录的 4 段多说话人 m4a + 1 段 2in1.wav
+│                                          16kHz 原生（非 8k 上采！），不存在空高频段问题
+│                                          作为 S4 场景验证「未来硬件升级到 16k」之后效果
 ├── recordings_raw/                      # 真实业务 PTT 录音 (3458 条, 8kHz)
 ├── recordings_cleaned/                  # v1 清洗分桶 (13 信号)
 │   ├── green/    优质 ( 60.2%, 2082 条)
@@ -564,25 +574,207 @@ python test_pipeline_compare.py --no-save-wavs      # 不存中间 wav，省磁�
 
 ---
 
+### G.6 ⭐ 音频方法横向对比 `test_audio_methods_compare.py`
+
+**这是当前最重要的入口测试**——对比所有音频处理方法，覆盖 4 个真实业务场景。
+
+#### 测试方法（4 场景 × 8 候选方法）
+
+**场景：**
+
+| 场景 ID | 数据来源 | 样本数 | 是否有 GT | 衡量指标 |
+|---|---|---|---|---|
+| **S1 单人 clean** | `groundtruth.csv` 中的 green++ 样本 | 5 | ✓ 有真值 | **CER**（字错率，越低越好）|
+| **S2 多人** | `verify_multi/`（疑似多说话人）| 5 | ✗ | SNR + ASR 字数 + 说话人区分度 |
+| **S3 嘈杂** | `recordings_cleaned_v2/yellow` 中 SNR 最低的 30 条随机抽 5 | 5 | ✗ | SNR 改善 + ASR 字数 |
+| **S4 自录多人** | `samples_test/`（团队自己录的多人对话，**16kHz 原生**）| 5 | ✗ | SNR + ASR 字数 + 听感 |
+
+**S4 是关键补充**：`samples_test/` 是**16kHz 原生采样**（非 8k 上采），不存在 4-8kHz 空高频段问题。在 S4 上跑，可以验证：
+- 模型在「未来硬件升级到 16kHz」之后会怎么表现
+- 区分"模型本身的能力"vs"被 8k 上采数据拖累的表现"
+- 真实多人重叠场景下分离能力的天花板
+
+**方法（按"是否做分离"分类）：**
+
+| 方法 ID | Pipeline | 类别 |
+|---|---|---|
+| M0 | raw（不处理）| 基线 |
+| M1 | DFN3 50%干湿混合 | 仅降噪 |
+| M1b | FRCRN（中文场景）| 仅降噪 |
+| M2 | 200ms 静音 padding | 仅前置 |
+| M3 | DFN3 + pad200 | 降噪+前置 |
+| M3b | **FRCRN + pad200** ⭐ | 降噪+前置 |
+| M4 | baseline ONNX 分离 | 仅分离 |
+| M5 | pad200 + baseline_sep | 前置+分离 |
+| M6 | FRCRN + sep | 降噪+分离 |
+| M7 | **FRCRN + pad200 + sep** ⭐ | 全配置 |
+
+#### 怎么跑
+
+```bash
+# 默认: 4 场景各 5 条
+python test_audio_methods_compare.py
+
+# 指定 seed 复现实验
+python test_audio_methods_compare.py --seed 42
+```
+
+#### 输出
+
+```
+test_audio_methods/<时间戳>/
+├── summary.txt            场景×方法汇总（CER/SNR/字数 表格）
+├── detail.csv             每条样本所有方法所有指标
+└── wavs/<场景>/<filename>/
+    ├── 00_原始.wav         基线
+    ├── M0_raw_主.wav
+    ├── M1_dfn3_主.wav
+    ├── M1b_frcrn_主.wav
+    ├── M3b_frcrn+pad200_主.wav
+    ├── M5_pad+baseline_sep_主.wav   分离主轨
+    ├── M5_pad+baseline_sep_副.wav   分离副轨
+    ├── M7_frcrn+pad+sep_主.wav      ⭐ 当前最强候选
+    └── gt.txt              S1 才有，真值文本
+```
+
+#### 决策框架
+
+| 读数 | 判断 |
+|---|---|
+| S1 CER 低 + S2/S4 ASR 字数高 | **首选生产方案** |
+| S1 CER 持平但 S3/S4 字数下降 | 处理过度，谨慎 |
+| 仅 1-2 条样本拉开差距 | **不能做决策**，扩样本到 30 条/场景 |
+| 多场景一致领先 | 真正的赢家 |
+
+⚠️ **重要警告：5 条样本统计上不可靠**——单条幸运 case 就能让某方法看起来"领先"。生产决策前必须扩到 30 条/场景。
+
+---
+
+### G.7 ⭐ 基于 Ground Truth 的 CER 评估 `eval_with_groundtruth.py`
+
+#### 用途
+
+只针对**有 ground truth 的样本**算 CER（字错率），是**最严格的客观指标**。
+
+#### 测试方法
+
+输入：`groundtruth.csv`（100 条标注样本，来自 green++）
+处理：每个候选 pipeline 在 GT 样本上跑 ASR，输出文本与真值做归一化后的字符级编辑距离对比
+归一化策略：繁体→简体，全角→半角，去标点+空格，统一小写
+
+#### 跑一次
+
+```bash
+# 跑全部已注册 pipeline
+python eval_with_groundtruth.py
+
+# 只跑指定 pipeline
+python eval_with_groundtruth.py --pipelines P1_raw_funasr P3_pad200_funasr
+
+# 调试用，限制前 N 条
+python eval_with_groundtruth.py --limit 10
+```
+
+#### 输出
+
+```
+eval_results/<时间戳>/
+├── summary.txt    总览（每个 pipeline 的整体 CER + CER 分布 + 对比）
+└── detail.csv     每条样本的 ref/hyp/编辑距离/CER
+```
+
+#### 当前已知 baseline
+
+| Pipeline | 整体 CER | 完美率 |
+|---|---|---|
+| P1 raw → FunASR | 10.70% | 43/98 (44%) |
+| P2 DFN3 → FunASR | 10.40% | 40/98 (41%) |
+| **P3 pad200 → FunASR** | **9.54%** | **48/98 (49%)** |
+| P4 pad500 → FunASR | 9.79% | 46/98 |
+
+注：FRCRN 和组合方案的 CER 还没正式跑这个脚本，要补。
+
+---
+
+### G.8 单/多人判别器准确率验证 `test_multispeaker_accuracy.py`
+
+#### 用途
+
+验证 `is_multispeaker.py` 是否能用——这决定了「单/多人路由」方案是否可行。
+
+#### 测试方法
+
+- **假设标签**：`groundtruth.csv` 中的样本默认为单人（来自 green++ 干净数据），`verify_multi/` 默认为多人（注：后者是判别器自己生成，是 circular 测试）
+- 在两组样本上跑判别器
+- 计算混淆矩阵 + 单人误判率（FP）
+- 输出疑似 FP 列表供人耳复核
+
+#### 跑一次
+
+```bash
+python test_multispeaker_accuracy.py
+```
+
+#### 当前已验证结论 ⚠️
+
+```
+GT 单人 min_sim 分布: 均值 0.55, 中位 0.54
+verify_multi  min_sim 分布: 均值 0.55, 中位 0.56
+（两个分布几乎完全重合！）
+
+任何阈值下 FP 都 ≥ TP, 判别器无区分能力
+```
+
+**结论**：基于 resemblyzer 的当前判别器在儿童 + 8kHz 数据上失效，**路由方案不可行**。
+→ 当前推荐"全员一刀切"使用 M3b 或 M7。
+
+---
+
+### G.9 FRCRN 降噪模块 `frcrn_denoise.py`
+
+ClearerVoice-Studio 出品，中文场景训练，对儿童语音保留比 DFN3 好。
+
+```python
+from frcrn_denoise import FRCRNDenoiser
+dn = FRCRNDenoiser()
+y = dn(x_16k)   # 16kHz mono float32 → 同
+```
+
+实测 CER 改善：DFN3 在 cleaned 数据上 14.51%，**FRCRN 降到 8.89%**（5 样本，需扩验证）。
+
+⚠️ 注意：FRCRN 在 4-8kHz 空高频段会填内容（HF 噪声 -112dB → -95dB），可能是"伪人声谐波"。听感校验后再决定是否上线。
+
+---
+
 ### 🎯 评估流程推荐顺序
 
 新接手项目时按以下顺序跑通：
 
 ```bash
-# 1. 听感先行：抽样听降噪前后差异
-python test_denoise_sample.py
+# === 第一步：快速摸底 ===
+python test_audio_methods_compare.py
+# 5 分钟内看到 4 场景所有方法的对比表
+# 输出: test_audio_methods/<时间戳>/summary.txt
 
-# 2. 客观量化：算降噪指标
-python test_denoise_asr.py --save-wavs       # 生成样本对
-python measure_denoise_metrics.py            # 算指标
+# === 第二步：扩样本验证（生产决策前必做）===
+# 改 test_audio_methods_compare.py 里 pick_samples 的样本数到 30
+# 跑 30-60 分钟，得到统计稳定的对比
 
-# 3. 对比 ASR 引擎
-python test_funasr_vs_whisper.py
+# === 第三步：CER 客观量化 ===
+python eval_with_groundtruth.py
+# 在 GT 100 条上对比所有 pipeline 的真实 CER
 
-# 4. 终极横向对比（决策依据）
-python test_pipeline_compare.py
+# === 第四步：听感校验 ===
+# 进入 wavs/<scenario>/<filename>/ 听以下场景：
+#   - S1 单人：FRCRN 是否吞字
+#   - S3 嘈杂：分离是否漏听
+#   - S4 自录多人：能否清晰分出两人
+# 这一步不可替代——任何客观指标都会撒谎，唯有人耳不会
 
-# 5. 看 report.csv，按业务场景挑最优 pipeline
+# === 第五步：边角验证 ===
+python test_multispeaker_accuracy.py     # 判别器是否可用
+python test_funasr_vs_whisper.py         # ASR 引擎是否切换
+python measure_denoise_metrics.py        # 降噪客观指标
 ```
 
 ---
