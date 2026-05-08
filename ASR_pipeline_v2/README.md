@@ -612,12 +612,24 @@ python test_pipeline_compare.py --no-save-wavs      # 不存中间 wav，省磁�
 #### 怎么跑
 
 ```bash
-# 默认: 4 场景各 5 条
+# 默认 N=5：smoke test 用，验证流程能跑通（CPU 上 5-10 分钟）
 python test_audio_methods_compare.py
 
+# ⭐ 生产决策必须 N≥30（GPU 上推荐，约 30-60 分钟；CPU 1-2 小时）
+python test_audio_methods_compare.py --n 30
+
+# CPU 上跑大样本，跳过 FRCRN（FRCRN CPU RTF≈1.8，慢）
+python test_audio_methods_compare.py --n 30 --no-frcrn
+
+# 快速对比降噪部分（跳过分离方法）
+python test_audio_methods_compare.py --n 50 --no-sep
+
 # 指定 seed 复现实验
-python test_audio_methods_compare.py --seed 42
+python test_audio_methods_compare.py --n 30 --seed 42
 ```
+
+> ⚠️ N=5 只做 smoke test！**做任何生产决策前必须 N≥30**。
+> 5 条样本里单个幸运 case 就能让某方法看起来"领先 50%"——之前已踩过这个坑。
 
 #### 输出
 

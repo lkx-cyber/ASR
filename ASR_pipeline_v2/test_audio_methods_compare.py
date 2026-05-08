@@ -152,8 +152,8 @@ def pad_silence(audio, sr, ms=200):
 
 
 # ============== 抽样 ==============
-def pick_samples(seed=42):
-    """各场景挑 5 条"""
+def pick_samples(n_per_scenario=5, seed=42):
+    """各场景挑 N 条；S4 永远用 samples_test/ 全部文件（不抽样）"""
     random.seed(seed)
     samples = {}
 
@@ -162,7 +162,7 @@ def pick_samples(seed=42):
     with open(gt_path, encoding="utf-8-sig") as f:
         rows = [r for r in csv.DictReader(f)
                 if r["correct_text"].strip() and r["correct_text"].strip() != "/n"]
-    s1_samples = random.sample(rows, 5)
+    s1_samples = random.sample(rows, min(n_per_scenario, len(rows)))
     samples["S1_单人clean"] = [
         (r["filename"],
          os.path.join(BASE_DIR, "recordings_cleaned_v2/green++", r["filename"]),
@@ -172,30 +172,33 @@ def pick_samples(seed=42):
 
     # S2 多人: from verify_multi/
     multi_dir = os.path.join(BASE_DIR, "verify_multi")
-    multi_files = sorted(os.listdir(multi_dir))
-    s2_picked = random.sample(multi_files, 5)
-    samples["S2_多人"] = [
-        (f, os.path.join(multi_dir, f), None) for f in s2_picked
-    ]
+    if os.path.isdir(multi_dir):
+        multi_files = sorted(os.listdir(multi_dir))
+        s2_picked = random.sample(multi_files, min(n_per_scenario, len(multi_files)))
+        samples["S2_多人"] = [
+            (f, os.path.join(multi_dir, f), None) for f in s2_picked
+        ]
 
-    # S3 嘈杂: yellow tier 中 SNR 最低 + 有内容（避免空音频）
+    # S3 嘈杂: yellow tier 中 SNR 最低 + 有内容
     rep_path = os.path.join(BASE_DIR, "recordings_cleaned_v2/report_v2.csv")
-    with open(rep_path, encoding="utf-8-sig") as f:
-        all_rows = list(csv.DictReader(f))
-    noisy = [r for r in all_rows if r["tier"] == "yellow"
-             and float(r.get("snr_db") or 0) > 5
-             and int(r.get("asr_chars") or 0) > 3]
-    noisy.sort(key=lambda r: float(r["snr_db"]))
-    # 挑前 30 中随机 5 条（避免集中在某段）
-    pool = noisy[:30]
-    s3_picked = random.sample(pool, 5)
-    yellow_dir = os.path.join(BASE_DIR, "recordings_cleaned_v2/yellow")
-    samples["S3_嘈杂"] = [
-        (r["filename"], os.path.join(yellow_dir, r["filename"]), None)
-        for r in s3_picked
-    ]
+    if os.path.exists(rep_path):
+        with open(rep_path, encoding="utf-8-sig") as f:
+            all_rows = list(csv.DictReader(f))
+        noisy = [r for r in all_rows if r["tier"] == "yellow"
+                 and float(r.get("snr_db") or 0) > 5
+                 and int(r.get("asr_chars") or 0) > 3]
+        noisy.sort(key=lambda r: float(r["snr_db"]))
+        # 候选池 = 最嘈杂的 6N 条；从中随机抽 N，避免每次都抽到同几条
+        pool_size = max(30, n_per_scenario * 6)
+        pool = noisy[:pool_size]
+        s3_picked = random.sample(pool, min(n_per_scenario, len(pool)))
+        yellow_dir = os.path.join(BASE_DIR, "recordings_cleaned_v2/yellow")
+        samples["S3_嘈杂"] = [
+            (r["filename"], os.path.join(yellow_dir, r["filename"]), None)
+            for r in s3_picked
+        ]
 
-    # S4 自录多人: samples_test/ (16kHz 原生，非 8k 上采，最干净测试源)
+    # S4 自录多人: samples_test/ (16kHz 原生)，固定全用，不抽样
     samples_test_dir = os.path.join(BASE_DIR, "samples_test")
     if os.path.isdir(samples_test_dir):
         files = sorted([f for f in os.listdir(samples_test_dir)
@@ -210,8 +213,16 @@ def pick_samples(seed=42):
 # ============== 主流程 ==============
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--n", type=int, default=5,
+                        help="每个场景的样本数（S4 始终用 samples_test/ 全部文件）。"
+                             "推荐：CPU 跑 5-10，GPU 跑 30+。"
+                             "<10 仅供 smoke test，做生产决策必须 ≥30。")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out-root", default="test_audio_methods")
+    parser.add_argument("--no-frcrn", action="store_true",
+                        help="跳过 FRCRN 相关方法（M1b/M3b/M6/M7），CPU 上节省时间")
+    parser.add_argument("--no-sep", action="store_true",
+                        help="跳过分离相关方法（M4/M5/M6/M7），快速对比降噪")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -219,8 +230,13 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     wav_dir = os.path.join(out_dir, "wavs")
 
-    samples = pick_samples(args.seed)
-    print(f"📋 共 {sum(len(v) for v in samples.values())} 条样本，覆盖 {len(samples)} 个场景\n")
+    samples = pick_samples(n_per_scenario=args.n, seed=args.seed)
+    total = sum(len(v) for v in samples.values())
+    print(f"📋 每场景 N={args.n} 条，共 {total} 条样本（含 S4 自录多人 {len(samples.get('S4_自录多人', []))} 条），"
+          f"覆盖 {len(samples)} 个场景")
+    if args.n < 10:
+        print("   ⚠️  N<10 仅适合 smoke test，生产决策需 N≥30")
+    print()
 
     # 加载模型（按需）
     print("加载模型...")
@@ -319,7 +335,13 @@ def main():
             return tracks[idx_sorted[0]], tracks[idx_sorted[1]] if len(tracks) > 1 else None
 
     method_names = list(METHODS.keys())
-    print(f"📋 方法: {method_names}\n")
+    if args.no_frcrn:
+        method_names = [m for m in method_names if "frcrn" not in m]
+        print("  ⏭️  跳过 FRCRN 方法")
+    if args.no_sep:
+        method_names = [m for m in method_names if "sep" not in m]
+        print("  ⏭️  跳过分离方法")
+    print(f"📋 方法 ({len(method_names)} 个): {method_names}\n")
 
     # ============== 跑测试 ==============
     # results: list of dict, 每条样本一行
